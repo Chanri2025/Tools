@@ -1,0 +1,7 @@
+ulbId,ulbName,parentULB,totalHouse,totalHouseScan,totalSeg,totalMix,totalNotReceived,ulbCount,totalActiveEmp,totalOnDutyEmp,totalOffDutyEmp,totalAbsentEmp,inprogressULB,completeULB,totalNotSpecified,totalNotScan,totalDumpTrip,totalGCWeight,totalDryWeight,totalWetWeight
+1,Amravati,Maharashtra,259950,11353,1953,726,14,57,227,16,30,211,0,7,91,8569,21,0,0,0
+2,Chhatrapati Sambhaji Nagar,Maharashtra,256428,78231,23498,12595,548,75,387,99,59,288,0,9,478,41112,205,0,0,0
+3,Kokan,Maharashtra,495439,77302,19354,16455,775,39,351,114,40,237,0,8,402,40316,133,0,0,0
+4,Nagpur,Maharashtra,238341,30988,10796,607,109,76,418,60,56,358,0,16,0,19476,71,0,0,0
+5,Nashik,Maharashtra,128368,14977,348,1335,8,59,114,25,24,89,0,2,0,13286,110,0,0,0
+6,Pune,Maharashtra,54359,5431,2930,100,3,65,50,6,6,44,0,4,0,2398,21,0,0,0
