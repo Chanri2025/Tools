@@ -1,82 +1,210 @@
-from sqlalchemy import create_engine, inspect, text
+from pymongo import MongoClient
 import pandas as pd
 from tqdm import tqdm
 import os
 import requests
+from datetime import datetime
 
 
-def migrate_mysql(source_uri, destination_uri):
-    """Migrate all tables from one MySQL DB to another."""
-    source_engine = create_engine(source_uri)
-    dest_engine = create_engine(destination_uri)
+def migrate_csv_to_mongodb(csv_path, mongo_uri, db_name, collection_name, delimiter=';'):
+    """
+    Migrate banking data from CSV file to MongoDB collection.
+    
+    Args:
+        csv_path: Path to the CSV file or URL
+        mongo_uri: MongoDB connection URI
+        db_name: MongoDB database name
+        collection_name: MongoDB collection name
+        delimiter: CSV delimiter character
+    """
+    # Connect to MongoDB
+    client = MongoClient(mongo_uri)
+    db = client[db_name]
+    collection = db[collection_name]
+    
+    # Load CSV data
+    if csv_path.lower().startswith(('http://', 'https://')):
+        print(f"🌐 Downloading CSV from {csv_path}...")
+        resp = requests.get(csv_path)
+        resp.raise_for_status()
+        df = pd.read_csv(pd.io.common.StringIO(resp.text), delimiter=delimiter, quotechar='"')
+    else:
+        print(f"📂 Reading CSV file from {csv_path}...")
+        df = pd.read_csv(csv_path, delimiter=delimiter, quotechar='"')
+    
+    # Clean column names (remove quotes if present)
+    df.columns = [col.strip('"') for col in df.columns]
+    
+    # Convert TimeStamp to datetime
+    print("🕒 Converting timestamps...")
+    df['TimeStamp'] = pd.to_datetime(df['TimeStamp'])
+    
+    # Convert numeric columns to appropriate types
+    numeric_columns = [
+        'Injection_Electricity', 'Total_Consumption', 'Net_Injection',
+        'Banking_Unit', 'Banking_Cumulative', 'Adjusted_Unit',
+        'MOD_Price', 'Banking_Charges', 'Adjustment_Charges'
+    ]
+    
+    for col in numeric_columns:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    # Convert DataFrame to list of dictionaries
+    print("🔄 Preparing data for MongoDB...")
+    records = df.to_dict('records')
+    
+    # Check if collection exists and has data
+    existing_count = collection.count_documents({})
+    if existing_count > 0:
+        print(f"⚠️  Collection '{collection_name}' already contains {existing_count} documents.")
+        choice = input("Do you want to (a)ppend, (r)eplace, or (c)ancel? [a/r/c]: ").lower()
+        
+        if choice == 'c':
+            print("❌ Operation cancelled.")
+            return
+        elif choice == 'r':
+            print(f"🗑️  Dropping existing collection '{collection_name}'...")
+            collection.drop()
+    
+    # Insert data into MongoDB
+    print(f"📥 Inserting {len(records)} records into {db_name}.{collection_name}...")
+    
+    # Process in batches for better performance
+    batch_size = 1000
+    for i in tqdm(range(0, len(records), batch_size), desc="Inserting batches", unit="batch"):
+        batch = records[i:i+batch_size]
+        
+        # Upsert records (update if exists, insert if not)
+        for record in batch:
+            collection.update_one(
+                {"TimeStamp": record["TimeStamp"]},
+                {"$set": record},
+                upsert=True
+            )
+    
+    # Create index on TimeStamp for better query performance
+    print("🔍 Creating index on TimeStamp field...")
+    collection.create_index("TimeStamp")
+    
+    # Verify the import
+    final_count = collection.count_documents({})
+    print(f"✅ Import completed! Collection now contains {final_count} documents.")
+    
+    # Close MongoDB connection
+    client.close()
 
-    inspector = inspect(source_engine)
-    tables = inspector.get_table_names()
 
-    if not tables:
-        print("⚠️  No tables found in the source MySQL database.")
-        return
-
-    print(f"📋  Found {len(tables)} MySQL table(s): {', '.join(tables)}")
-
-    for table in tqdm(tables, desc="Migrating MySQL Tables", unit="table"):
-        print(f"\nMigrating table: {table}")
-        query = f"SELECT * FROM `{table}`"
-
-        try:
-            df = pd.read_sql(query, source_engine)
-            with dest_engine.begin() as conn:
-                df.to_sql(table, conn, if_exists='replace', index=False)
-            print(f"   ✅ Table {table} migrated successfully.")
-        except Exception as e:
-            print(f"   ❌ Error migrating table {table}: {e}")
-            continue
-
-    print("🎉 MySQL Migration completed successfully!")
-
-
-def migrate_sql_dump(dump_content, destination_uri):
-    """Load SQL dump content into the destination MySQL database."""
-    dest_engine = create_engine(destination_uri)
-    statements = [stmt.strip() for stmt in dump_content.split(';') if stmt.strip()]
-    print(f"📋  Applying {len(statements)} SQL statement(s) from dump...")
-
-    with dest_engine.begin() as conn:
-        for stmt in tqdm(statements, desc="Executing SQL Statements", unit="stmt"):
-            try:
-                conn.execute(text(stmt))
-            except Exception as e:
-                tqdm.write(f"   ❌ Error executing statement: {e}\nStatement snippet: {stmt[:100]}...")
-                continue
-
-    print("🎉 SQL dump loaded successfully!")
+def migrate_csv_from_string(csv_content, mongo_uri, db_name, collection_name, delimiter=';'):
+    """
+    Migrate banking data from CSV string content to MongoDB collection.
+    
+    Args:
+        csv_content: CSV content as a string
+        mongo_uri: MongoDB connection URI
+        db_name: MongoDB database name
+        collection_name: MongoDB collection name
+        delimiter: CSV delimiter character
+    """
+    # Connect to MongoDB
+    client = MongoClient(mongo_uri)
+    db = client[db_name]
+    collection = db[collection_name]
+    
+    # Load CSV data from string
+    print("📄 Processing CSV content...")
+    df = pd.read_csv(pd.io.common.StringIO(csv_content), delimiter=delimiter, quotechar='"')
+    
+    # Clean column names (remove quotes if present)
+    df.columns = [col.strip('"') for col in df.columns]
+    
+    # Convert TimeStamp to datetime
+    print("🕒 Converting timestamps...")
+    df['TimeStamp'] = pd.to_datetime(df['TimeStamp'])
+    
+    # Convert numeric columns to appropriate types
+    numeric_columns = [
+        'Injection_Electricity', 'Total_Consumption', 'Net_Injection',
+        'Banking_Unit', 'Banking_Cumulative', 'Adjusted_Unit',
+        'MOD_Price', 'Banking_Charges', 'Adjustment_Charges'
+    ]
+    
+    for col in numeric_columns:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    # Convert DataFrame to list of dictionaries
+    print("🔄 Preparing data for MongoDB...")
+    records = df.to_dict('records')
+    
+    # Check if collection exists and has data
+    existing_count = collection.count_documents({})
+    if existing_count > 0:
+        print(f"⚠️  Collection '{collection_name}' already contains {existing_count} documents.")
+        choice = input("Do you want to (a)ppend, (r)eplace, or (c)ancel? [a/r/c]: ").lower()
+        
+        if choice == 'c':
+            print("❌ Operation cancelled.")
+            return
+        elif choice == 'r':
+            print(f"🗑️  Dropping existing collection '{collection_name}'...")
+            collection.drop()
+    
+    # Insert data into MongoDB
+    print(f"📥 Inserting {len(records)} records into {db_name}.{collection_name}...")
+    
+    # Process in batches for better performance
+    batch_size = 1000
+    for i in tqdm(range(0, len(records), batch_size), desc="Inserting batches", unit="batch"):
+        batch = records[i:i+batch_size]
+        
+        # Upsert records (update if exists, insert if not)
+        for record in batch:
+            collection.update_one(
+                {"TimeStamp": record["TimeStamp"]},
+                {"$set": record},
+                upsert=True
+            )
+    
+    # Create index on TimeStamp for better query performance
+    print("🔍 Creating index on TimeStamp field...")
+    collection.create_index("TimeStamp")
+    
+    # Verify the import
+    final_count = collection.count_documents({})
+    print(f"✅ Import completed! Collection now contains {final_count} documents.")
+    
+    # Close MongoDB connection
+    client.close()
 
 
 if __name__ == "__main__":
-    # ─── CONFIGURE YOUR SOURCE ──────────────────────────────────────────────────
+    # ─── CONFIGURE YOUR SOURCE AND DESTINATION ─────────────────────────────────────
     # SOURCE can be:
-    # - HTTPS/HTTP URL to a .sql dump
-    # - Path to local .sql file
-    # - MySQL URI
-    source = "/Users/barunghosh/Desktop/Appynitty/Tools/DB Migration with SQL Dump/guvnl_dev.sql"  # Replace with actual link to .sql file
-    destination = "mysql+pymysql://root@localhost/my_first_db"  # Replace with actual MySQL URI
+    # - HTTPS/HTTP URL to a CSV file
+    # - Path to local CSV file
+    # - CSV content as a string (for testing)
+    source = "C:/Users/hp/Desktop/Code/Tools/DB Upload in MongoDB with csv file/banking_data.csv"  # Replace with actual path to CSV file
+    
+    # DESTINATION MongoDB settings
+    mongo_uri = "mongodb://localhost:27017/"  # Replace with actual MongoDB URI
+    db_name = "powercasting"
+    collection_name = "Banking_Data"
+    delimiter = ";"
     # ────────────────────────────────────────────────────────────────────────────
 
-    if source.lower().startswith(('http://', 'https://')) and destination.startswith('mysql'):
-        print(f"🌐 Downloading SQL dump from {source}...")
-        resp = requests.get(source)
-        resp.raise_for_status()
-        dump_text = resp.text
-        migrate_sql_dump(dump_text, destination)
+    if source.lower().startswith(('http://', 'https://')):
+        print(f"🌐 Using CSV from URL: {source}")
+        migrate_csv_to_mongodb(source, mongo_uri, db_name, collection_name, delimiter)
 
-    elif os.path.isfile(source) and source.lower().endswith('.sql') and destination.startswith('mysql'):
-        with open(source, 'r', encoding='utf-8') as f:
-            dump_text = f.read()
-        migrate_sql_dump(dump_text, destination)
+    elif os.path.isfile(source) and source.lower().endswith(('.csv', '.txt')):
+        print(f"📂 Using local CSV file: {source}")
+        migrate_csv_to_mongodb(source, mongo_uri, db_name, collection_name, delimiter)
 
-    elif source.startswith('mysql') and destination.startswith('mysql'):
-        migrate_mysql(source, destination)
+    elif source.startswith('"TimeStamp"') or source.startswith('TimeStamp'):
+        print("📝 Using CSV content from string")
+        migrate_csv_from_string(source, mongo_uri, db_name, collection_name, delimiter)
 
     else:
-        print("❌ Unsupported source/destination combination.\n" \
-              "Use HTTP/HTTPS link or .sql file for MySQL, or two MySQL URIs.")
+        print("❌ Unsupported source format.\n" \
+              "Use HTTP/HTTPS link to a CSV file, a local CSV file path, or CSV content as a string.")
